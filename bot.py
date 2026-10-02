@@ -387,7 +387,19 @@ async def scheduler(bot: Bot) -> None:
                 report = build_today_report(read_people(), now.date())
                 if report is not None:
                     await bot.send_message(chat_id, report, message_thread_id=thread_id)
-                    log.info("Поздравление отправлено в chat_id=%s thread_id=%s", chat_id, thread_id)
+                    upcoming_report = build_next_report(read_people(), now.date())
+                    if upcoming_report != "В таблице пока нет дней рождения.":
+                        await bot.send_message(
+                            chat_id,
+                            upcoming_report,
+                            message_thread_id=thread_id,
+                        )
+                    log.info(
+                        "Поздравление и ближайшие дни рождения отправлены "
+                        "в chat_id=%s thread_id=%s",
+                        chat_id,
+                        thread_id,
+                    )
                 else:
                     log.info("На %s именинников нет, сообщение не отправляется", now.date())
                 last_sent = now.date()
