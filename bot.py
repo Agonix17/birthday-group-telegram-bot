@@ -34,6 +34,7 @@ class Person:
     name: str
     birth_date: date
     preferred_name: str | None = None
+    gender: str = "male"
 
 
 class ConfigError(RuntimeError):
@@ -122,6 +123,7 @@ def read_people() -> list[Person]:
         normalized = {normalize_key(str(k)): v for k, v in row.items()}
         name = str(normalized.get("name") or normalized.get("имя") or "").strip()
         preferred_name = str(normalized.get("name+") or normalized.get("имя+") or "").strip()
+        gender = str(normalized.get("gender") or normalized.get("пол") or "").strip().lower()
         raw_date = normalized.get("birthdate") or normalized.get("датырождения")
         active = normalized.get("active") or normalized.get("активен")
         if not name and not raw_date:
@@ -137,6 +139,7 @@ def read_people() -> list[Person]:
                     name=name,
                     birth_date=parse_birth_date(raw_date),
                     preferred_name=preferred_name or None,
+                    gender=gender,
                 )
             )
         except ValueError as exc:
@@ -242,12 +245,13 @@ def build_today_report(people: list[Person], today: date | None = None) -> str |
         display_name = html.escape(person.preferred_name or person.name)
         age = age_on(person, today)
         verb = "исполнился" if age_word(age) == "год" else "исполнилось"
+        pronoun = "ей" if person.gender in {"female", "f", "женский", "ж", "жен"} else "ему"
         lines.extend(
             [
                 f"🎉 <b>Поздравляем <u>{display_name}</u>!</b>",
                 "",
                 f"Сегодня, {today.day} {MONTH_NAMES[today.month - 1]} {today.year} года, "
-                f"ему {verb} <u>{age_phrase(age)}</u>.",
+                f"{pronoun} {verb} <u>{age_phrase(age)}</u>.",
             ]
         )
     return "\n".join(lines)
