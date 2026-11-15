@@ -28,6 +28,9 @@ log = logging.getLogger("birthday-bot")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 DATA_FILE = Path(os.getenv("DELIVERY_FILE", "data/delivery.json"))
+SCHEDULER_STATE_FILE = Path(
+    os.getenv("SCHEDULER_STATE_FILE", "data/scheduler_state.json")
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,36 @@ def save_delivery(chat_id: int, thread_id: int | None) -> None:
         json.dumps({"chat_id": chat_id, "thread_id": thread_id}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def load_scheduler_state() -> dict[str, dict[str, str]]:
+    try:
+        state = json.loads(SCHEDULER_STATE_FILE.read_text(encoding="utf-8"))
+        return {
+            "monthly_sent": state.get("monthly_sent", {}),
+            "daily_sent": state.get("daily_sent", {}),
+        }
+    except FileNotFoundError:
+        return {"monthly_sent": {}, "daily_sent": {}}
+    except (OSError, json.JSONDecodeError, AttributeError) as exc:
+        log.warning("Не удалось прочитать состояние расписания: %s", exc)
+        return {"monthly_sent": {}, "daily_sent": {}}
+
+
+def save_scheduler_state(state: dict[str, dict[str, str]]) -> None:
+    SCHEDULER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary_file = SCHEDULER_STATE_FILE.with_suffix(
+        SCHEDULER_STATE_FILE.suffix + ".tmp"
+    )
+    temporary_file.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary_file.replace(SCHEDULER_STATE_FILE)
+
+
+def delivery_key(chat_id: int, thread_id: int | None) -> str:
+    return f"{chat_id}:{thread_id or 0}"
 
 
 def normalize_key(value: str) -> str:
@@ -516,13 +549,26 @@ async def test(message: Message) -> None:
 async def scheduler(bot: Bot) -> None:
     hour = int(os.getenv("SEND_HOUR", "0"))
     minute = int(os.getenv("SEND_MINUTE", "0"))
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ConfigError("SEND_HOUR должен быть 0–23, SEND_MINUTE — 0–59")
     tz = get_timezone()
-    last_sent: date | None = None
-    last_monthly_sent: tuple[int, int] | None = None
+    state = load_scheduler_state()
+    monthly_sent = state["monthly_sent"]
+    daily_sent = state["daily_sent"]
     while True:
         now = datetime.now(tz)
         chat_id, thread_id = load_delivery()
-        if chat_id is not None and now.hour == 0 and now.minute == 0 and last_monthly_sent != (now.year, now.month):
+        key = delivery_key(chat_id, thread_id) if chat_id is not None else None
+
+        # The monthly post is strictly limited to the first day of a month.
+        # Persist the month per destination so process restarts cannot replay it.
+        if (
+            key is not None
+            and now.day == 1
+            and now.hour == 0
+            and now.minute == 0
+            and monthly_sent.get(key) != now.strftime("%Y-%m")
+        ):
             try:
                 monthly_report = month_birthday_report(
                     read_people(),
@@ -532,11 +578,18 @@ async def scheduler(bot: Bot) -> None:
                     reference_date=now.date(),
                 )
                 await bot.send_message(chat_id, monthly_report, message_thread_id=thread_id)
-                last_monthly_sent = (now.year, now.month)
+                monthly_sent[key] = now.strftime("%Y-%m")
+                save_scheduler_state(state)
                 log.info("Месячный список именинников отправлен в chat_id=%s", chat_id)
             except Exception:
                 log.exception("Не удалось отправить месячный список именинников")
-        if now.hour == hour and now.minute == minute and last_sent != now.date() and chat_id is not None:
+
+        if (
+            key is not None
+            and now.hour == hour
+            and now.minute == minute
+            and daily_sent.get(key) != now.date().isoformat()
+        ):
             try:
                 report = build_today_report(read_people(), now.date())
                 if report is not None:
@@ -549,7 +602,8 @@ async def scheduler(bot: Bot) -> None:
                     )
                 else:
                     log.info("На %s именинников нет, сообщение не отправляется", now.date())
-                last_sent = now.date()
+                daily_sent[key] = now.date().isoformat()
+                save_scheduler_state(state)
             except Exception:
                 log.exception("Не удалось отправить ежедневную сводку")
         await asyncio.sleep(20)
