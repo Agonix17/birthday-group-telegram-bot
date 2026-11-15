@@ -235,7 +235,7 @@ def month_birthday_report(
     birthdays.sort(key=lambda item: (item[0], item[1].name.casefold()))
 
     month_label = MONTH_NAMES_GENITIVE[month - 1]
-    month_heading = f"в {month_label}" if month == 12 else month_label
+    month_heading = month_label
     if include_greeting:
         intro = MONTH_INTROS[month]
         custom_heart_id = os.getenv("CUSTOM_BLUE_HEART_ID", "").strip()
@@ -249,11 +249,12 @@ def month_birthday_report(
         event_date = date(year, month, min(event_day, calendar.monthrange(year, month)[1]))
         days = (event_date - first_day).days
         age = year - person.birth_date.year
-        lines.append(
-            f"• {html.escape(person.name)} — "
-            f"{'сегодня' if days == 0 else f'через {days_phrase(days)}'}, "
-            f"{event_day} {month_label} ({age_phrase(age)})"
-        )
+        if include_greeting:
+            timing = "сегодня" if days == 0 else f"через {days_phrase(days)}"
+            line = f"• {html.escape(person.name)} — {timing}, {event_day} {month_label} ({age_phrase(age)})"
+        else:
+            line = f"• {html.escape(person.name)} — {event_day} {month_label} ({age_phrase(age)})"
+        lines.append(line)
     if not birthdays:
         lines.append("В этом месяце именинников нет.")
     return "\n".join(lines)
@@ -466,6 +467,32 @@ async def month_birthdays(message: Message) -> None:
         await message.answer(str(exc))
     except Exception:
         log.exception("Ошибка формирования списка именинников месяца")
+        await message.answer("Не удалось прочитать Google Sheets. Проверьте настройки и доступ таблицы.")
+
+
+@router.message(Command("previewmonth"))
+async def preview_month(message: Message) -> None:
+    """Admin-only preview of the automatic first-day monthly post."""
+    if not await can_manage(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+    try:
+        today_date = datetime.now(get_timezone()).date()
+        argument = message.text.split(maxsplit=1)[1] if message.text and " " in message.text else "11"
+        month = parse_month(argument, 11)
+        await message.answer(
+            month_birthday_report(
+                read_people(),
+                month,
+                today_date.year,
+                include_greeting=True,
+                reference_date=date(today_date.year, month, 1),
+            )
+        )
+    except ValueError as exc:
+        await message.answer(str(exc))
+    except Exception:
+        log.exception("Ошибка предпросмотра месячного сообщения")
         await message.answer("Не удалось прочитать Google Sheets. Проверьте настройки и доступ таблицы.")
 
 
